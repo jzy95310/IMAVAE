@@ -1,2 +1,2 @@
 # CMVAE
-Implementation of Causal Mediation Variational Autoencoder
+Implementation of Identifiable Mediation Analysis Variational Autoencoder
