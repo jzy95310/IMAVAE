@@ -1,4 +1,3 @@
-from .cmvae import *
-from .dcsfa_nmf import *
+from .imavae import *
 from .ivae import *
 from .nmf_base import *

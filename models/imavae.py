@@ -1,4 +1,4 @@
-# cmvae.py: Causal Mediation Variational Autoencoder (CMVAE) model
+# imavae.py: Identifiable Mediation Analysis Variational Autoencoder (IMAVAE) model
 # SEE LICENSE STATEMENT AT THE END OF THE FILE
 
 import os
@@ -14,9 +14,9 @@ import warnings
 from .ivae import iVAE
 from .nmf_base import NmfBase
 
-class CMVAE(NmfBase):
+class IMAVAE(NmfBase):
     """
-    Causal Mediation Variational Autoencoder (CMVAE) model
+    Identifiable Mediation Analysis Variational Autoencoder (IMAVAE) model
 
     Parameters
     ----------
@@ -92,7 +92,7 @@ class CMVAE(NmfBase):
         Whether to apply parameter annealing when learning the iVAE.
         Defaults to ``True``.
     model_name : str, optional
-        Name of the model. Defaults to ``'cmvae'``.
+        Name of the model. Defaults to ``'imavae'``.
     save_folder : str, optional
         Location to save the best pytorch model parameters. 
         Defaults to './model_ckpts/'
@@ -127,11 +127,11 @@ class CMVAE(NmfBase):
         lr=1e-3,
         weight_decay=0,
         anneal=True,
-        model_name="cmvae",
+        model_name="imavae",
         save_folder="./model_ckpts/",
         verbose=False,
     ):
-        super(CMVAE, self).__init__(
+        super(IMAVAE, self).__init__(
             n_components=n_components,
             device=device,
             n_sup_networks=n_sup_networks,
@@ -177,7 +177,6 @@ class CMVAE(NmfBase):
         y_dim : int
             Total number of labels to predict
         """
-        assert aux_dim == 1 or aux_dim == self.n_sup_networks, "aux_dim must be 1 or equal to n_sup_networks."
         assert self.n_sup_networks <= self.n_components, "n_sup_networks must be smaller or equal to n_components."
         if self.aug_aux_dim is not None:
             assert self.aug_aux_dim > aux_dim, "aug_aux_dim must be larger than aux_dim."
@@ -201,7 +200,7 @@ class CMVAE(NmfBase):
         self.prior_dist = self.ivae.prior_dist
         # Initialize the decoder based on the decoder type
         if self.decoder_type == "NMF":
-            super(CMVAE, self)._initialize(dim_in)
+            super(IMAVAE, self)._initialize(dim_in)
         elif self.decoder_type == "VAE":
             self.decoder = self.ivae.f
         else:
@@ -387,7 +386,7 @@ class CMVAE(NmfBase):
     
     def forward(self, X, aux, y, task_mask, pred_weight, intercept_mask=None, avg_intercept=False):
         """
-        CMVAE forward pass
+        IMAVAE forward pass
 
         Parameters
         ----------
@@ -633,7 +632,7 @@ class CMVAE(NmfBase):
         y_val=None,
         y_pred_weights_val=None,
         task_mask_val=None,
-        best_model_name="CMVAE-best-model.pt"
+        best_model_name="imavae-best-model.pt"
     ):
         """
         Fit the model.
@@ -693,11 +692,11 @@ class CMVAE(NmfBase):
             Shape: ``[n_val_samples,n_sup_networks]``
         best_model_name (str, optional):
             save file name for the best model. Must end in ".pt". Defaults to
-            ``'CMVAE-best-model.pt'``.
+            ``'imavae-best-model.pt'``.
 
         Returns
         -------
-        self : CMVAE
+        self : IMAVAE
         """
         # Initialize model parameters.
         self._initialize(X.shape[1], aux.shape[1], y.shape[1])
@@ -1107,15 +1106,15 @@ class CMVAE(NmfBase):
             score_results = np.array(auc_list)
         return score_results
     
-    def acme_score(self, n_samples, treatment=False, intercept_mask=None, avg_intercept=True, simulaltions=100):
+    def acme_score(self, aux, treatment=False, intercept_mask=None, avg_intercept=True, simulaltions=100):
         """
         Calculate the average causal mediation effect (or indirect effect) given the auxillary feature (treatment)
         ACME(t) = E[Y(t, M(1)) - Y(t, M(0))]
 
         Parameters
         ----------
-        n_samples : int
-            Number of samples to use for estimating the ACME.
+        aux : numpy.ndarray
+            Auxiliary Features
         treatment : bool, optional
             If True, calculate the ACME for the treatment group.
             Otherwise, calculate the ACME for the control group.
@@ -1135,8 +1134,15 @@ class CMVAE(NmfBase):
         acme_std : float
             Standard deviation of the average causal mediation effect.
         """
-        assert self.aux_dim == 1, "aux_dim must be 1 for mediation_score() method."
+        assert len(aux.shape) == 2, "aux must be a 2D array."
+        assert ((aux[:,0]==0) | (aux[:,0]==1)).all(), "The first column of aux must be binary."
+        if not isinstance(aux, torch.Tensor):
+            aux = torch.tensor(aux).float()
+        n_samples = aux.shape[0]
         t0, t1 = torch.zeros(n_samples, 1), torch.ones(n_samples, 1)
+        if aux.shape[1] > 1:
+            t0 = torch.cat([t0, aux[:,1:]], dim=1)
+            t1 = torch.cat([t1, aux[:,1:]], dim=1)
         if self.aug_aux_dim is not None:
             t0, t1 = self.aux_transform(t0), self.aux_transform(t1)
         acme_arr = []
@@ -1149,15 +1155,15 @@ class CMVAE(NmfBase):
             acme_arr.append((y_m1 - y_m0).mean().item())
         return np.mean(acme_arr), np.std(acme_arr)
     
-    def ade_score(self, n_samples, treatment=False, intercept_mask=None, avg_intercept=True, simulaltions=100):
+    def ade_score(self, aux, treatment=False, intercept_mask=None, avg_intercept=True, simulaltions=100):
         """
         Calculate the average direct effect given the auxillary feature (treatment)
         ADE(t) = E[Y(1, M(t)) - Y(0, M(t))]
 
         Parameters
         ----------
-        n_samples : int
-            Number of samples to use for estimating the ADE.
+        aux : numpy.ndarray
+            Auxiliary Features
         treatment : bool, optional
             If True, calculate the ADE for the treatment group.
             Otherwise, calculate the ADE for the control group.
@@ -1177,8 +1183,15 @@ class CMVAE(NmfBase):
         ade_std : float
             Standard deviation of the average direct effect.
         """
-        assert self.aux_dim == 1, "aux_dim must be 1 for direct_score() method."
+        assert len(aux.shape) == 2, "aux must be a 2D array."
+        assert ((aux[:,0]==0) | (aux[:,0]==1)).all(), "The first column of aux must be binary."
+        if not isinstance(aux, torch.Tensor):
+            aux = torch.tensor(aux).float()
+        n_samples = aux.shape[0]
         t0, t1 = torch.zeros(n_samples, 1), torch.ones(n_samples, 1)
+        if aux.shape[1] > 1:
+            t0 = torch.cat([t0, aux[:,1:]], dim=1)
+            t1 = torch.cat([t1, aux[:,1:]], dim=1)
         if self.aug_aux_dim is not None:
             t0, t1 = self.aux_transform(t0), self.aux_transform(t1)
         ade_arr = []
@@ -1191,15 +1204,15 @@ class CMVAE(NmfBase):
             ade_arr.append((y_t1 - y_t0).mean().item())
         return np.mean(ade_arr), np.std(ade_arr)
     
-    def ate_score(self, n_samples, intercept_mask=None, avg_intercept=True, simulaltions=100):
+    def ate_score(self, aux, intercept_mask=None, avg_intercept=True, simulaltions=100):
         """
         Calculate the average treatment effect (or total effect)
         ATE = E[Y(1, M(1)) - Y(0, M(0))]
 
         Parameters
         ----------
-        n_samples : int
-            Number of samples to use for estimating the ATE.
+        aux : numpy.ndarray
+            Auxiliary Features
         intercept_mask (torch.Tensor, optional): window specific intercept
             mask. Defaults to None.
             Shape: ``[batch_size,n_intercepts]``
@@ -1215,8 +1228,15 @@ class CMVAE(NmfBase):
         ate_std : float
             Standard deviation of the average treatment effect.
         """
-        assert self.aux_dim == 1, "aux_dim must be 1 for total_score() method."
+        assert len(aux.shape) == 2, "aux must be a 2D array."
+        assert ((aux[:,0]==0) | (aux[:,0]==1)).all(), "The first column of aux must be binary."
+        if not isinstance(aux, torch.Tensor):
+            aux = torch.tensor(aux).float()
+        n_samples = aux.shape[0]
         t0, t1 = torch.zeros(n_samples, 1), torch.ones(n_samples, 1)
+        if aux.shape[1] > 1:
+            t0 = torch.cat([t0, aux[:,1:]], dim=1)
+            t1 = torch.cat([t1, aux[:,1:]], dim=1)
         if self.aug_aux_dim is not None:
             t0, t1 = self.aux_transform(t0), self.aux_transform(t1)
         ate_arr = []
