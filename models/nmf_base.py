@@ -64,8 +64,12 @@ class NmfBase(nn.Module):
         Indices of the divisions of feature types. Defaults to None.
     group_weights : list of floats, optional
         Weights for each of the feature types. Defaults to None.
-    verbose : bool, optional
-        Activates or deactivates print statements globally. Defaults to False.
+    verbose : int, optional
+        Verbosity level. 
+        ``0`` - No output
+        ``1`` - Output loss and metric values
+        ``2`` - Output loss and metric values and visualization of latent space
+        Defaults to 0.
     """
 
     def __init__(
@@ -81,7 +85,7 @@ class NmfBase(nn.Module):
         sup_smoothness_weight=1,
         feature_groups=None,
         group_weights=None,
-        verbose=False,
+        verbose=0,
     ):
         super(NmfBase, self).__init__()
         self.n_components = n_components
@@ -206,7 +210,7 @@ class NmfBase(nn.Module):
         nmf_max_iter : int
             Maximum iterations for convergence using sklearn.decomposition.NMF
         """
-        if self.verbose:
+        if self.verbose > 0:
             print("Pretraining NMF...")
         # Initialize the model - solver corresponds to defined recon loss
         if self.recon_loss == "IS":
@@ -232,7 +236,7 @@ class NmfBase(nn.Module):
             # Prep labels and set auc storage
             class_auc_list = []
             # Create progress bar if verbose
-            if self.verbose:
+            if self.verbose > 0:
                 print(
                     "Identifying predictive components for supervised network {}".format(
                         sup_net
@@ -275,7 +279,7 @@ class NmfBase(nn.Module):
                 current_net = negative_predictive_order[0]
             current_auc = class_auc_list[current_net.astype(int)]
             # Declare the selected network and save the network and chosen AUCs
-            if self.verbose:
+            if self.verbose > 0:
                 print(
                     "Selecting network: {} with auc {} for sup net {} using constraint {} correlation".format(
                         current_net, current_auc, sup_net, self.fixed_corr[sup_net]

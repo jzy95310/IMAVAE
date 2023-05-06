@@ -7,6 +7,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader, WeightedRandomSampler
 import numpy as np
+import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score, mean_squared_error
 from tqdm import tqdm
 import warnings
@@ -96,8 +97,12 @@ class IMAVAE(NmfBase):
     save_folder : str, optional
         Location to save the best pytorch model parameters. 
         Defaults to './model_ckpts/'
-    verbose : bool, optional
-        Activates or deactivates print statements. Defaults to ``False``.
+    verbose : int, optional
+        Verbosity level. 
+        ``0`` - No output
+        ``1`` - Output loss and metric values
+        ``2`` - Output loss and metric values and visualization of latent space
+        Defaults to 0.
     """
 
     def __init__(
@@ -129,7 +134,7 @@ class IMAVAE(NmfBase):
         anneal=True,
         model_name="imavae",
         save_folder="./model_ckpts/",
-        verbose=False,
+        verbose=0,
     ):
         super(IMAVAE, self).__init__(
             n_components=n_components,
@@ -210,9 +215,12 @@ class IMAVAE(NmfBase):
         if not os.path.exists(self.save_folder):
             os.makedirs(self.save_folder)
         # Initialize linear/logistic regression parameters
-        self.phi_list = nn.ParameterList(
-            [nn.Parameter(torch.randn(1)) for _ in range(self.n_sup_networks + self.aux_dim)]   # shape: (n_sup_networks + aux_dim, 1)
-        )
+        if self.n_sup_networks == self.y_dim or self.y_dim == 1:
+            self.phi_list = nn.ParameterList(
+                [nn.Parameter(torch.randn(1)) for _ in range(self.n_sup_networks + self.aux_dim)]   # shape: (n_sup_networks + aux_dim, 1)
+            )
+        else:
+            raise ValueError("y_dim must be either equal to n_sup_networks or 1.")
         self.beta_list = nn.ParameterList(
             [
                 nn.Parameter(torch.randn(self.n_intercepts, 1))
@@ -300,16 +308,21 @@ class IMAVAE(NmfBase):
             # Concatenate predictions into a single matrix [n_samples,n_tasks]
             y_pred = torch.cat(y_pred_list, dim=1)
         elif self.y_dim == 1:
+            logit = torch.sum(torch.stack(
+                [s[:,sup_net].view(-1,1) * self.get_phi(sup_net) for sup_net in range(self.n_sup_networks)] + \
+                [aux[:,idx].view(-1,1) * self.get_phi(idx+self.n_sup_networks) for idx in range(self.aux_dim)], 
+                dim=1), dim=1)
             if self.n_intercepts == 1:
-                y_pred = torch.cat([s[:, :self.n_sup_networks], aux], dim=1) @ self.get_phi() + self.beta_list[0]
+                logit += self.beta_list[0]
             elif self.n_intercepts > 1 and not avg_intercept:
-                y_pred = torch.cat([s[:, :self.n_sup_networks], aux], dim=1) @ self.get_phi() + intercept_mask @ self.beta_list[0]
+                logit += intercept_mask @ self.beta_list[0]
             else:
                 intercept_mask = (
                     torch.ones(aux.shape[0], self.n_intercepts).to(self.device)
                     / self.n_intercepts
                 )
-                y_pred = torch.cat([s[:, :self.n_sup_networks], aux], dim=1) @ self.get_phi() + intercept_mask @ self.beta_list[0]
+                logit += intercept_mask @ self.beta_list[0]
+            y_pred = logit if self.predictor_type == "linear" else torch.sigmoid(logit)
 
         return y_pred
     
@@ -336,7 +349,7 @@ class IMAVAE(NmfBase):
             aux = self.aux_transform(aux)
         return self.encoder(torch.cat([X, aux], dim=1))
     
-    def get_phi(self, sup_net=-1):
+    def get_phi(self, sup_net):
         """
         Return the linear/logistic regression coefficient correspoding to ``sup_net``.
 
@@ -352,8 +365,6 @@ class IMAVAE(NmfBase):
         ----------
         sup_net : int, optional
             Index of the supervised network you would like to get a coefficient for.
-            If ``sup_net == -1``, then return all coefficients.
-            Defaults to ``-1``.
 
         Returns
         -------
@@ -362,23 +373,14 @@ class IMAVAE(NmfBase):
             positive or negative softplus(phi).
             shape: ``[n_sup_networks + aux_dim, 1]``
         """
-        if self.n_sup_networks == self.y_dim:
-            phi = self.phi_list
-        elif self.y_dim == 1:
-            phi = nn.Parameter(torch.tensor([x for x in self.phi_list])).view(-1, 1)
-        else:
-            raise ValueError(f"Unsupported y_dim value: {self.y_dim}")
-        
-        if sup_net >= self.n_sup_networks:
-            sup_net -= self.n_sup_networks
         fixed_corr_str = self.fixed_corr[sup_net].lower() if self.y_dim > 1 else self.fixed_corr[0].lower()
         if fixed_corr_str == "n/a":
-            return phi if sup_net == -1 else phi[sup_net]
+            return self.phi_list[sup_net]
         elif fixed_corr_str == "positive":
             # NOTE: use nn.functional instead of nn here.
-            return F.softplus(phi) if sup_net == -1 else F.softplus(phi[sup_net])
+            return F.softplus(self.phi_list[sup_net])
         elif fixed_corr_str == "negative":
-            return (-1 * F.softplus(phi)) if sup_net == -1 else (-1 * F.softplus(phi[sup_net]))
+            return -1 * F.softplus(self.phi_list[sup_net])
         else:
             # NOTE: spit out an informative error
             raise ValueError(f"Unsupported fixed_corr value: {fixed_corr_str}")
@@ -440,7 +442,8 @@ class IMAVAE(NmfBase):
         else:
             # Compute the evidence lower bound (ELBO)
             elbo, s = self.ivae.elbo(X, aux)
-            recon_loss = self.elbo_weight * elbo.mul(-1) + self.recon_weight * nn.MSELoss()(X, self.decoder(s))
+            recon_loss = self.recon_weight * nn.MSELoss()(X, self.decoder(s))
+            elbo_loss = self.elbo_weight * elbo.mul(-1)
         # Get predictions
         y_pred = self.get_all_class_predictions(
             aux,
@@ -453,7 +456,7 @@ class IMAVAE(NmfBase):
             y_pred * task_mask,
             y * task_mask,
         )
-        return recon_loss, pred_loss
+        return recon_loss, elbo_loss, pred_loss
     
     @torch.no_grad()
     def transform(self, X, aux, intercept_mask=None, avg_intercept=True, return_npy=True):
@@ -583,7 +586,7 @@ class IMAVAE(NmfBase):
         # Instantiate Optimizer
         optimizer = self.instantiate_optimizer()
         # Define iterator
-        if self.verbose:
+        if self.verbose > 0:
             epoch_iter = tqdm(range(n_pre_epochs))
         else:
             epoch_iter = range(n_pre_epochs)
@@ -592,11 +595,11 @@ class IMAVAE(NmfBase):
             r_loss = 0.0
             for batch in loader:
                 optimizer.zero_grad()
-                recon_loss, _ = self.forward(*batch)
+                recon_loss, _, _ = self.forward(*batch)
                 recon_loss.backward()
                 optimizer.step()
                 r_loss += recon_loss.item()
-            if self.verbose:
+            if self.verbose > 0:
                 avg_r = r_loss / len(loader)
                 epoch_iter.set_description(
                     f"Encoder Pretrain Epoch: {epoch}, Recon Loss: {avg_r:.6}",
@@ -626,7 +629,7 @@ class IMAVAE(NmfBase):
         batch_size=128,
         lr=1e-3,
         pretrain=True,
-        verbose=False,
+        verbose=0,
         X_val=None,
         aux_val=None,
         y_val=None,
@@ -799,7 +802,7 @@ class IMAVAE(NmfBase):
         self.lr = lr
 
         # Define the training iterator.
-        if self.verbose:
+        if self.verbose > 0:
             print("Beginning Training")
             epoch_iter = tqdm(range(n_epochs))
         else:
@@ -814,9 +817,9 @@ class IMAVAE(NmfBase):
             for batch in loader:
                 self.train()
                 optimizer.zero_grad()
-                recon_loss, pred_loss = self.forward(*batch)
+                recon_loss, elbo_loss, pred_loss = self.forward(*batch)
                 # Weighting happens inside of the forward call
-                loss = recon_loss + pred_loss
+                loss = recon_loss + elbo_loss + pred_loss
                 loss.backward()
                 optimizer.step()
                 epoch_loss += loss.item()
@@ -894,7 +897,7 @@ class IMAVAE(NmfBase):
                             self.save_folder + self.best_model_name,
                         )
 
-                    if self.verbose:
+                    if self.verbose > 0:
                         epoch_iter.set_description(
                             "Epoch: {}, Best Epoch: {}, Best Recon MSE: {:.6}, Best Pred Metric {}, current MSE: {:.6}, current Pred Metric: {}".format(
                                 epoch,
@@ -905,15 +908,19 @@ class IMAVAE(NmfBase):
                                 validation_metric_list,
                             )
                         )
+                        if self.verbose > 1:
+                            self.visualize_latent_space(aux_val)
                 else:
-                    if self.verbose:
+                    if self.verbose > 0:
                         epoch_iter.set_description(
                             "Epoch: {}, Current Training MSE: {:.6}, Current Pred Metric: {}".format(
                                 epoch, training_mse_loss, training_metric_list
                             )
                         )
+                        if self.verbose > 1:
+                            self.visualize_latent_space(aux)   
         
-        if self.verbose:
+        if self.verbose > 0:
             print(
                 "Saving the last epoch with training MSE: {:.6} and Pred Metric: {}".format(
                     training_mse_loss, training_metric_list
@@ -921,7 +928,7 @@ class IMAVAE(NmfBase):
             )
         
         if X_val is not None and aux_val is not None and y_val is not None:
-            if self.verbose:
+            if self.verbose > 0:
                 print(
                     "Loaded the best model from Epoch: {} with MSE: {:.6} and Pred Metric: {}".format(
                         self.best_epoch, self.best_val_recon, self.best_val_metrics
@@ -962,6 +969,31 @@ class IMAVAE(NmfBase):
             """
             X_recon = self.get_comp_recon(s, component)
         return X_recon
+    
+    def visualize_latent_space(self, aux):
+        """
+        Visualize the first two dimensions of latent space.
+
+        Parameters
+        ----------
+        aux : numpy.ndarray
+            Auxiliary Features
+            Shape: ``[n_samples,aux_dim]``
+        """
+        N = aux.shape[0]
+        t0, t1 = torch.zeros(N, 1), torch.ones(N, 1)
+        z_m0 = self.prior_dist.sample(*self.ivae.prior_params(t0))
+        z_m1 = self.prior_dist.sample(*self.ivae.prior_params(t1))
+        z_m = torch.stack([z_m0[i,:] if aux[i,0] == 0 else z_m1[i,:] for i in range(N)]).numpy()
+
+        _, ax = plt.subplots(1,1,figsize=(8,7))
+        c_dict = {0: 'blue', 1: 'orange'}
+        for g in np.unique(aux[:,0].squeeze()):
+            i = np.where(aux[:,0].squeeze() == g)
+            ax.scatter(z_m[i,0], z_m[i,1], c=c_dict[g], label=g, s=1)
+        ax.legend()
+        ax.set_title("p(Z|T)")
+        plt.show()
     
     def predict_proba(self, X, aux, return_scores=False):
         """
