@@ -24,7 +24,7 @@ import pandas as pd
 from tensorflow.keras.callbacks import LearningRateScheduler, ModelCheckpoint, EarlyStopping
 from keras.optimizers import Adam, SGD
 import tensorflow as tf
-from datagenerator import dataGenerator
+# from datagenerator import dataGenerator
 np.random.seed(123)
 python_random.seed(123)
 #import ceil
@@ -335,110 +335,110 @@ def get_model_memory_usage(batch_size, model):
     gbytes = np.round(total_memory / (1024.0 ** 3), 3) + internal_model_mem_count
     return gbytes
 
-def simulate_mediation(df_train,df_val,df_test,X_train,X_val,X_test,params_df,model,n_runs,batch_size,epochs,iterations,
-                       output_path=None,use_model=None):
-    """
-    """
-#     output_path = '/home/ubuntu/hacking/projects/deep-mediation/nov2020'
-#     error = []
-#     alpha = []
-#     beta = []
-#     theta = []
-#     delta = []
-#     gamma = []
-#     r = []
-#     hist = []
-#     history = []
-    # Initialize z with some phi
+# def simulate_mediation(df_train,df_val,df_test,X_train,X_val,X_test,params_df,model,n_runs,batch_size,epochs,iterations,
+#                        output_path=None,use_model=None):
+#     """
+#     """
+# #     output_path = '/home/ubuntu/hacking/projects/deep-mediation/nov2020'
+# #     error = []
+# #     alpha = []
+# #     beta = []
+# #     theta = []
+# #     delta = []
+# #     gamma = []
+# #     r = []
+# #     hist = []
+# #     history = []
+#     # Initialize z with some phi
     
-    if use_model!=None:
-        print("Using already saved model...")
-        z_train = model.predict(X_train) 
-        z_val = model.predict(X_val)
-    else:
-        print("Using intial random model parameters")
-        z_train = model.predict(X_train) 
-        z_val = model.predict(X_val)
-    try:
-        z_train = np.concatenate(z_train)
-        z_val = np.concatenate(z_val)
-    except:
-        pass
-    # plot_scatter(z,df.m,labels=['z','m'])
+#     if use_model!=None:
+#         print("Using already saved model...")
+#         z_train = model.predict(X_train) 
+#         z_val = model.predict(X_val)
+#     else:
+#         print("Using intial random model parameters")
+#         z_train = model.predict(X_train) 
+#         z_val = model.predict(X_val)
+#     try:
+#         z_train = np.concatenate(z_train)
+#         z_val = np.concatenate(z_val)
+#     except:
+#         pass
+#     # plot_scatter(z,df.m,labels=['z','m'])
     
 
-    for i in range(0,iterations):
-        print('Starting iteration... %s'%(i+1))
-        # Check for directionality
-        if np.corrcoef(z_train,df_train.Y)[0,1] < 0:
-              z_train = z_train*(-1)
-        if np.corrcoef(z_val,df_val.Y)[0,1] < 0:
-              z_val = z_val*(-1)
-        # Check for sclaing issue
-        z_train = zscore(z_train)
-        z_val = zscore(z_val)
+#     for i in range(0,iterations):
+#         print('Starting iteration... %s'%(i+1))
+#         # Check for directionality
+#         if np.corrcoef(z_train,df_train.Y)[0,1] < 0:
+#               z_train = z_train*(-1)
+#         if np.corrcoef(z_val,df_val.Y)[0,1] < 0:
+#               z_val = z_val*(-1)
+#         # Check for sclaing issue
+#         z_train = zscore(z_train)
+#         z_val = zscore(z_val)
         
-        lm_train = smf.ols(formula='z_train ~ X', data=df_train).fit()
-        alpha0_train = lm_train.params.loc['Intercept']
-        alph_train = lm_train.params.loc['X']
+#         lm_train = smf.ols(formula='z_train ~ X', data=df_train).fit()
+#         alpha0_train = lm_train.params.loc['Intercept']
+#         alph_train = lm_train.params.loc['X']
         
-        lm_val = smf.ols(formula='z_val ~ X', data=df_val).fit()
-        alpha0_val = lm_val.params.loc['Intercept']
-        alph_val = lm_val.params.loc['X']
+#         lm_val = smf.ols(formula='z_val ~ X', data=df_val).fit()
+#         alpha0_val = lm_val.params.loc['Intercept']
+#         alph_val = lm_val.params.loc['X']
 
 
-        lm_train = smf.ols(formula='Y ~ z_train + X', data=df_train).fit()
-        beta0_train = lm_train.params.Intercept
-        bet_train = lm_train.params.z_train
-        gam_train = lm_train.params.X
-        resid_std_train = np.std(lm_train.resid)
+#         lm_train = smf.ols(formula='Y ~ z_train + X', data=df_train).fit()
+#         beta0_train = lm_train.params.Intercept
+#         bet_train = lm_train.params.z_train
+#         gam_train = lm_train.params.X
+#         resid_std_train = np.std(lm_train.resid)
 
-        lm_val = smf.ols(formula='Y ~ z_val + X', data=df_val).fit()
-        beta0_val = lm_val.params.Intercept
-        bet_val = lm_val.params.z_val
-        gam_val = lm_val.params.X
-        resid_std_val = np.std(lm_val.resid)
+#         lm_val = smf.ols(formula='Y ~ z_val + X', data=df_val).fit()
+#         beta0_val = lm_val.params.Intercept
+#         bet_val = lm_val.params.z_val
+#         gam_val = lm_val.params.X
+#         resid_std_val = np.std(lm_val.resid)
 
 
-        e_train = df_train.Y - beta0_train - (df_train.X*gam_train)
-        h_train = alpha0_train + df_train.X*alph_train
-        d_train = (((bet_train*e_train)+h_train)/((bet_train**2)+1))
-        d_train = np.array(d_train)
+#         e_train = df_train.Y - beta0_train - (df_train.X*gam_train)
+#         h_train = alpha0_train + df_train.X*alph_train
+#         d_train = (((bet_train*e_train)+h_train)/((bet_train**2)+1))
+#         d_train = np.array(d_train)
         
-        e_val = df_val.Y - beta0_val - (df_val.X*gam_val)
-        h_val = alpha0_val + df_val.X*alph_val
-        d_val = (((bet_val*e_val)+h_val)/((bet_val**2)+1))
-        d_val = np.array(d_val)
+#         e_val = df_val.Y - beta0_val - (df_val.X*gam_val)
+#         h_val = alpha0_val + df_val.X*alph_val
+#         d_val = (((bet_val*e_val)+h_val)/((bet_val**2)+1))
+#         d_val = np.array(d_val)
         
-        adam = Adam(lr=0.01, decay=0.03)
-        model.compile(loss='mean_absolute_error',optimizer=adam)
+#         adam = Adam(lr=0.01, decay=0.03)
+#         model.compile(loss='mean_absolute_error',optimizer=adam)
         
-        early = EarlyStopping(monitor='val_loss', patience=50,mode='min',verbose=1)
-        mc = ModelCheckpoint(filepath=os.path.join(output_path,'model-'+str(i+1)+'.h5'), verbose=1, monitor='val_loss', save_best_only=True)
-        cb = [early, mc] 
+#         early = EarlyStopping(monitor='val_loss', patience=50,mode='min',verbose=1)
+#         mc = ModelCheckpoint(filepath=os.path.join(output_path,'model-'+str(i+1)+'.h5'), verbose=1, monitor='val_loss', save_best_only=True)
+#         cb = [early, mc] 
        
-        hist = model.fit_generator(dataGenerator(X_train,d_train, batch_size, meanImg=None, scaling=False,dim=(79, 95, 69), shuffle=True, augment=False, maxAngle=40, maxShift=10),validation_data=dataGenerator(X_val, d_val, batch_size, meanImg=None, scaling=False,dim=(79, 95, 69), shuffle=True, augment=False, maxAngle=40, maxShift=10),epochs=1000,verbose=1,max_queue_size=32,workers=4,use_multiprocessing=False,steps_per_epoch=np.ceil(X_train.shape[0]/batch_size),callbacks=cb)        
+#         hist = model.fit_generator(dataGenerator(X_train,d_train, batch_size, meanImg=None, scaling=False,dim=(79, 95, 69), shuffle=True, augment=False, maxAngle=40, maxShift=10),validation_data=dataGenerator(X_val, d_val, batch_size, meanImg=None, scaling=False,dim=(79, 95, 69), shuffle=True, augment=False, maxAngle=40, maxShift=10),epochs=1000,verbose=1,max_queue_size=32,workers=4,use_multiprocessing=False,steps_per_epoch=np.ceil(X_train.shape[0]/batch_size),callbacks=cb)        
 
 
-        z_train = model.predict(X_train)
-        z_val = model.predict(X_val)
+#         z_train = model.predict(X_train)
+#         z_val = model.predict(X_val)
         
-# Save the params in the pandas dataframe
-        params_df.loc[n_runs]['alpha0','iter_'+str(i)]=alpha0_train
-        params_df.loc[n_runs]['beta0','iter_'+str(i)]=beta0_train
-        params_df.loc[n_runs]['beta','iter_'+str(i)]=bet_train
-        params_df.loc[n_runs]['gamma','iter_'+str(i)]=gam_train
-        params_df.loc[n_runs]['alpha','iter_'+str(i)]=alph_train
-#         save_as_pickle(hist,filename=os.path.join(output_path,'hist-'+str(i+1)+'.pickle'))
-        params_df.to_excel(os.path.join(output_path,'params_'+str(i+1)+'.xlsx'))
-        try:
-            z_train = np.concatenate(z_train)
-            z_val = np.concatenate(z_val)
-        except:
-            pass
+# # Save the params in the pandas dataframe
+#         params_df.loc[n_runs]['alpha0','iter_'+str(i)]=alpha0_train
+#         params_df.loc[n_runs]['beta0','iter_'+str(i)]=beta0_train
+#         params_df.loc[n_runs]['beta','iter_'+str(i)]=bet_train
+#         params_df.loc[n_runs]['gamma','iter_'+str(i)]=gam_train
+#         params_df.loc[n_runs]['alpha','iter_'+str(i)]=alph_train
+# #         save_as_pickle(hist,filename=os.path.join(output_path,'hist-'+str(i+1)+'.pickle'))
+#         params_df.to_excel(os.path.join(output_path,'params_'+str(i+1)+'.xlsx'))
+#         try:
+#             z_train = np.concatenate(z_train)
+#             z_val = np.concatenate(z_val)
+#         except:
+#             pass
     
-        plot_train_loss(hist,os.path.join(output_path,'model_loss_'+str(i+1)+'.png'))
-    return params_df,z_train,z_val,model
+#         plot_train_loss(hist,os.path.join(output_path,'model_loss_'+str(i+1)+'.png'))
+#     return params_df,z_train,z_val,model
 
 def extract_params_test_data(model,X_test,df_test,output_path=None):
     z_test = model.predict(X_test)

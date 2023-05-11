@@ -495,7 +495,10 @@ class IMAVAE(NmfBase):
         else:
             aux = aux.to(self.device)
         if intercept_mask is not None:
-            intercept_mask = torch.Tensor(intercept_mask).to(self.device)
+            if not torch.is_tensor(intercept_mask):
+                intercept_mask = torch.Tensor(intercept_mask).to(self.device)
+            else:
+                intercept_mask = intercept_mask.to(self.device)
         
         s = self.get_embedding(X, aux)
         if self.decoder_type == "NMF":
@@ -835,19 +838,19 @@ class IMAVAE(NmfBase):
                     avg_intercept=False,
                     return_npy=True,
                 )
-                training_mse_loss = np.mean((X.detach().numpy() - X_recon) ** 2)
+                training_mse_loss = np.mean((X.detach().cpu().numpy() - X_recon) ** 2)
                 training_metric_list = []
                 for sup_net in range(self.n_sup_networks):
                     idx = sup_net if self.y_dim > 1 else 0
-                    temp_mask = task_mask[:, idx].detach().numpy()
+                    temp_mask = task_mask[:, idx].detach().cpu().numpy()
                     if self.predictor_type == "linear":
                         metric = mean_squared_error(
-                            y.detach().numpy()[temp_mask == 1, idx],
+                            y.detach().cpu().numpy()[temp_mask == 1, idx],
                             y_pred[temp_mask == 1, idx],
                         )
                     else:
                         metric = roc_auc_score(
-                            y.detach().numpy()[temp_mask == 1, idx],
+                            y.detach().cpu().numpy()[temp_mask == 1, idx],
                             y_pred[temp_mask == 1, idx],
                         )
                     training_metric_list.append(metric)
@@ -862,20 +865,20 @@ class IMAVAE(NmfBase):
                         return_npy=True,
                     )
                     validation_mse_loss = np.mean(
-                        (X_val.detach().numpy() - X_recon_val) ** 2
+                        (X_val.detach().cpu().numpy() - X_recon_val) ** 2
                     )
                     validation_metric_list = []
                     for sup_net in range(self.n_sup_networks):
                         idx = sup_net if self.y_dim > 1 else 0
-                        temp_mask = task_mask_val[:, idx].detach().numpy()
+                        temp_mask = task_mask_val[:, idx].detach().cpu().numpy()
                         if self.predictor_type == "linear":
                             metric = mean_squared_error(
-                                y_val.detach().numpy()[temp_mask == 1, idx],
+                                y_val.detach().cpu().numpy()[temp_mask == 1, idx],
                                 y_pred_val[temp_mask == 1, idx],
                             )
                         else:
                             metric = roc_auc_score(
-                                y_val.detach().numpy()[temp_mask == 1, idx],
+                                y_val.detach().cpu().numpy()[temp_mask == 1, idx],
                                 y_pred_val[temp_mask == 1, idx],
                             )
                         validation_metric_list.append(metric)
@@ -884,7 +887,10 @@ class IMAVAE(NmfBase):
                     self.val_pred_hist.append(validation_metric_list)
 
                     mse_var_rat = validation_mse_loss / torch.std(X_val) ** 2
-                    avg_err = 1 - np.mean(validation_metric_list)
+                    if self.predictor_type == "linear":
+                        avg_err = np.mean(validation_metric_list)
+                    else:
+                        avg_err = 1 - np.mean(validation_metric_list)
 
                     if mse_var_rat + avg_err < self.best_performance:
                         self.best_epoch = epoch
@@ -981,10 +987,10 @@ class IMAVAE(NmfBase):
             Shape: ``[n_samples,aux_dim]``
         """
         N = aux.shape[0]
-        t0, t1 = torch.zeros(N, 1), torch.ones(N, 1)
+        t0, t1 = torch.zeros(N, 1).to(self.device), torch.ones(N, 1).to(self.device)
         z_m0 = self.prior_dist.sample(*self.ivae.prior_params(t0))
         z_m1 = self.prior_dist.sample(*self.ivae.prior_params(t1))
-        z_m = torch.stack([z_m0[i,:] if aux[i,0] == 0 else z_m1[i,:] for i in range(N)]).numpy()
+        z_m = torch.stack([z_m0[i,:] if aux[i,0] == 0 else z_m1[i,:] for i in range(N)]).cpu().numpy()
 
         _, ax = plt.subplots(1,1,figsize=(8,7))
         c_dict = {0: 'blue', 1: 'orange'}
@@ -1169,9 +1175,11 @@ class IMAVAE(NmfBase):
         assert len(aux.shape) == 2, "aux must be a 2D array."
         assert ((aux[:,0]==0) | (aux[:,0]==1)).all(), "The first column of aux must be binary."
         if not isinstance(aux, torch.Tensor):
-            aux = torch.tensor(aux).float()
+            aux = torch.tensor(aux).float().to(self.device)
+        else:
+            aux = aux.float().to(self.device)
         n_samples = aux.shape[0]
-        t0, t1 = torch.zeros(n_samples, 1), torch.ones(n_samples, 1)
+        t0, t1 = torch.zeros(n_samples, 1).to(self.device), torch.ones(n_samples, 1).to(self.device)
         if aux.shape[1] > 1:
             t0 = torch.cat([t0, aux[:,1:]], dim=1)
             t1 = torch.cat([t1, aux[:,1:]], dim=1)
@@ -1218,9 +1226,11 @@ class IMAVAE(NmfBase):
         assert len(aux.shape) == 2, "aux must be a 2D array."
         assert ((aux[:,0]==0) | (aux[:,0]==1)).all(), "The first column of aux must be binary."
         if not isinstance(aux, torch.Tensor):
-            aux = torch.tensor(aux).float()
+            aux = torch.tensor(aux).float().to(self.device)
+        else:
+            aux = aux.float().to(self.device)
         n_samples = aux.shape[0]
-        t0, t1 = torch.zeros(n_samples, 1), torch.ones(n_samples, 1)
+        t0, t1 = torch.zeros(n_samples, 1).to(self.device), torch.ones(n_samples, 1).to(self.device)
         if aux.shape[1] > 1:
             t0 = torch.cat([t0, aux[:,1:]], dim=1)
             t1 = torch.cat([t1, aux[:,1:]], dim=1)
@@ -1263,9 +1273,11 @@ class IMAVAE(NmfBase):
         assert len(aux.shape) == 2, "aux must be a 2D array."
         assert ((aux[:,0]==0) | (aux[:,0]==1)).all(), "The first column of aux must be binary."
         if not isinstance(aux, torch.Tensor):
-            aux = torch.tensor(aux).float()
+            aux = torch.tensor(aux).float().to(self.device)
+        else:
+            aux = aux.float().to(self.device)
         n_samples = aux.shape[0]
-        t0, t1 = torch.zeros(n_samples, 1), torch.ones(n_samples, 1)
+        t0, t1 = torch.zeros(n_samples, 1).to(self.device), torch.ones(n_samples, 1).to(self.device)
         if aux.shape[1] > 1:
             t0 = torch.cat([t0, aux[:,1:]], dim=1)
             t1 = torch.cat([t1, aux[:,1:]], dim=1)
@@ -1286,7 +1298,7 @@ if __name__ == "__main__":
 ###############################################################################
 # MIT License
 
-# Copyright (c) 2023 jzy95310
+# Copyright (c) 2023 Ziyang Jiang
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
