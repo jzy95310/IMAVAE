@@ -12,7 +12,7 @@ from sklearn.metrics import roc_auc_score, mean_squared_error
 from tqdm import tqdm
 import warnings
 
-from .ivae import iVAE
+from .ivae import iVAE, ConvIVAE
 from .nmf_base import NmfBase
 
 class IMAVAE(NmfBase):
@@ -175,8 +175,8 @@ class IMAVAE(NmfBase):
 
         Parameters
         ----------
-        dim_in : int
-            Total number of features
+        dim_in : int or tuple
+            Total number of features or shape of input features
         aux_dim : int
             Total number of auxiliary features
         y_dim : int
@@ -191,16 +191,30 @@ class IMAVAE(NmfBase):
         self.aux_dim = aux_dim if self.aug_aux_dim is None else self.aug_aux_dim
         self.y_dim = y_dim
         # Initialize the iVAE encoder
-        self.ivae = iVAE(
-            data_dim=self.dim_in,
-            latent_dim=self.n_components,
-            aux_dim=self.aux_dim,
-            n_layers=self.n_hidden_layers,
-            hidden_dim=self.hidden_dim,
-            activation=self.activation,
-            device=self.device,
-            anneal=self.anneal
-        )
+        if isinstance(dim_in, int):
+            self.ivae = iVAE(
+                data_dim=self.dim_in,
+                latent_dim=self.n_components,
+                aux_dim=self.aux_dim,
+                n_layers=self.n_hidden_layers,
+                hidden_dim=self.hidden_dim,
+                activation=self.activation,
+                device=self.device,
+                anneal=self.anneal
+            )
+        else:
+            self.ivae = ConvIVAE(
+                data_width=self.dim_in[1],
+                data_height=self.dim_in[2],
+                data_channels=self.dim_in[0],
+                aux_dim=self.aux_dim,
+                latent_feature_dim=self.n_components,
+                n_layers=self.n_hidden_layers,
+                hidden_dim=self.hidden_dim,
+                activation=self.activation,
+                device=self.device,
+                anneal=self.anneal
+            )
         self.encoder = self.ivae.g
         self.prior_dist = self.ivae.prior_dist
         # Initialize the decoder based on the decoder type
@@ -347,7 +361,10 @@ class IMAVAE(NmfBase):
         """
         if self.aug_aux_dim is not None:
             aux = self.aux_transform(aux)
-        return self.encoder(torch.cat([X, aux], dim=1))
+        if len(X.shape) == len(aux.shape):
+            return self.encoder(torch.cat([X, aux], dim=1))
+        else:
+            return self.encoder(X, aux)
     
     def get_phi(self, sup_net):
         """
@@ -646,7 +663,7 @@ class IMAVAE(NmfBase):
         Parameters
         ----------
         X (np.ndarray): Input Features
-            Shape: ``[n_samples, dim_in]``
+            Shape: ``[n_samples, dim_in]`` or ``[n_samples, width, height, channels]``
         aux (np.ndarray): Auxiliary features
             Shape: ``[n_samples, aux_dim]``
         y (np.ndarray): ground truth labels
@@ -705,7 +722,12 @@ class IMAVAE(NmfBase):
         self : IMAVAE
         """
         # Initialize model parameters.
-        self._initialize(X.shape[1], aux.shape[1], y.shape[1])
+        if len(X.shape) == 2:
+            # Shape: ``[n_samples, dim_in]``
+            self._initialize(X.shape[1], aux.shape[1], y.shape[1])
+        elif len(X.shape) == 4:
+            # Shape: ``[n_samples, width, height, channels]``
+            self._initialize(tuple([X.shape[1],X.shape[2],X.shape[3]]), aux.shape[1], y.shape[1])
 
         # Establish loss histories.
         self.training_hist = []  # tracks average overall loss
