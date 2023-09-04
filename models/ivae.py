@@ -14,7 +14,7 @@ from torch.nn.common_types import _size_2_t
 
 
 def weights_init(m):
-    if isinstance(m, nn.Linear):
+    if isinstance(m, (nn.Linear, nn.Conv2d, nn.ConvTranspose2d)):
         nn.init.xavier_uniform_(m.weight.data)
 
 class Erf(torch.nn.Module):
