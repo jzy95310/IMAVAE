@@ -13,17 +13,6 @@ from torch.nn import functional as F
 from torch.nn.common_types import _size_2_t
 
 
-def weights_init(m):
-    if isinstance(m, (nn.Linear, nn.Conv2d, nn.ConvTranspose2d)):
-        nn.init.xavier_uniform_(m.weight.data)
-
-class Erf(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x):
-        return torch.erf(x)
-
 ACTIVATIONS = {
     "relu": torch.nn.ReLU(),
     "sigmoid": torch.nn.Sigmoid(),
@@ -35,6 +24,17 @@ ACTIVATIONS = {
     "softmax": torch.nn.Softmax(),
     "erf": Erf(),
 }
+
+def weights_init(m):
+    if isinstance(m, (nn.Linear, nn.Conv2d, nn.ConvTranspose2d)):
+        nn.init.xavier_uniform_(m.weight.data)
+
+class Erf(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return torch.erf(x)
 
 class AdaptiveAverageUnpool2d(nn.Module):
     def __init__(self, output_size: _size_2_t = None) -> None:
@@ -545,23 +545,3 @@ class ConvIVAE(iVAE):
         f = self.f(s)
         logd = self.logd(s)
         return f.view(f.shape[0],-1), logd.exp().view(logd.shape[0],-1)
-    
-    def elbo(self, x, u):
-        decoder_params, (g, v), z, prior_params = self.forward(x, u)
-        x = x.view(x.shape[0], -1)
-        log_px_z = self.decoder_dist.log_pdf(x, *decoder_params)   # shape: (batch_size,)
-        log_qz_xu = self.encoder_dist.log_pdf(z, g, v)   # shape: (batch_size,)
-        log_pz_u = self.prior_dist.log_pdf(z, *prior_params)   # shape: (batch_size,)
-
-        if self.anneal_params:
-            a, b, c, d, N = self._training_hyperparams
-            M = z.size(0)
-            log_qz_tmp = self.encoder_dist.log_pdf(z.view(M, 1, self.latent_dim), g.view(1, M, self.latent_dim),
-                                                   v.view(1, M, self.latent_dim), reduce=False)    # shape: (batch_size, batch_size, latent_dim), temporary variable
-            log_qz = torch.logsumexp(log_qz_tmp.sum(dim=-1), dim=1, keepdim=False) - np.log(M * N)   # shape: (batch_size,)
-            log_qz_i = (torch.logsumexp(log_qz_tmp, dim=1, keepdim=False) - np.log(M * N)).sum(dim=-1)   # shape: (batch_size,)
-
-            return (a * log_px_z - b * (log_qz_xu - log_qz) - c * (log_qz - log_qz_i) - d * (
-                    log_qz_i - log_pz_u)).mean(), z
-        else:
-            return (log_px_z + log_pz_u - log_qz_xu).mean(), z
