@@ -13,6 +13,13 @@ from torch.nn import functional as F
 from torch.nn.common_types import _size_2_t
 
 
+class Erf(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return torch.erf(x)
+
 ACTIVATIONS = {
     "relu": torch.nn.ReLU(),
     "sigmoid": torch.nn.Sigmoid(),
@@ -28,13 +35,6 @@ ACTIVATIONS = {
 def weights_init(m):
     if isinstance(m, (nn.Linear, nn.Conv2d, nn.ConvTranspose2d)):
         nn.init.xavier_uniform_(m.weight.data)
-
-class Erf(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x):
-        return torch.erf(x)
 
 class AdaptiveAverageUnpool2d(nn.Module):
     def __init__(self, output_size: _size_2_t = None) -> None:

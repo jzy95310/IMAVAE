@@ -15,6 +15,26 @@ import warnings
 from .ivae import iVAE, ConvIVAE
 from .nmf_base import NmfBase
 
+
+class Erf(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return torch.erf(x)
+
+ACTIVATIONS = {
+    "relu": torch.nn.ReLU(),
+    "sigmoid": torch.nn.Sigmoid(),
+    "tanh": torch.nn.Tanh(),
+    "lrelu": torch.nn.LeakyReLU(),
+    "elu": torch.nn.ELU(),
+    "selu": torch.nn.SELU(),
+    "softplus": torch.nn.Softplus(),
+    "softmax": torch.nn.Softmax(),
+    "erf": Erf(),
+}
+
 class IMAVAE(NmfBase):
     """
     Identifiable Mediation Analysis Variational Autoencoder (IMAVAE) model
@@ -51,10 +71,16 @@ class IMAVAE(NmfBase):
     hidden_dim: int, optional
         Number of hidden units in the encoder and decoder of iVAE. 
         Defaults to ``50``.
+    n_sup_hidden_layers: int, optional
+        Number of hidden layers in the supervised networks. 
+        Defaults to ``0``.
+    n_sup_hidden_dim: int, optional
+        Number of hidden units in the supervised networks. 
+        Defaults to ``30``.
     aug_aux_dim: int, optional
         If given, the auxiliary variable will be augmented into
         the specified dimensionality. Defaults to ``None``.
-    activation : ``{'lrelu','sigmoid','xtanh','none'}``, optional
+    activation : ``{'lrelu','sigmoid','tanh','none'}``, optional
         Activation function for the encoder and decoder of iVAE. 
         Defaults to ``'lrelu'``.
     predictor_type : ``{'linear','logistic'}``, optional
@@ -119,6 +145,8 @@ class IMAVAE(NmfBase):
         sup_recon_weight=1.0,
         n_hidden_layers=2,
         hidden_dim=50,
+        n_sup_hidden_layers=0,
+        n_sup_hidden_dim=30,
         aug_aux_dim=None,
         activation="lrelu",
         predictor_type="linear",
@@ -156,6 +184,8 @@ class IMAVAE(NmfBase):
         self.elbo_weight = elbo_weight
         self.n_hidden_layers = n_hidden_layers
         self.hidden_dim = hidden_dim
+        self.n_sup_hidden_layers = n_sup_hidden_layers
+        self.n_sup_hidden_dim = n_sup_hidden_dim
         self.aug_aux_dim = aug_aux_dim
         self.activation = activation
         self.predictor_type = predictor_type
@@ -228,19 +258,42 @@ class IMAVAE(NmfBase):
         # Create the save folder if it doesn't exist
         if not os.path.exists(self.save_folder):
             os.makedirs(self.save_folder)
-        # Initialize linear/logistic regression parameters
+        # Initialize linear/logistic regression parameters OR
+        # Initialize neural network parameters if n_sup_hidden_layers > 0
         if self.n_sup_networks == self.y_dim or self.y_dim == 1:
-            self.phi_list = nn.ParameterList(
-                [nn.Parameter(torch.randn(1)) for _ in range(self.n_sup_networks + self.aux_dim)]   # shape: (n_sup_networks + aux_dim, 1)
-            )
+            if self.n_sup_hidden_layers == 0:
+                self.phi_list = nn.ParameterList(
+                    [nn.Parameter(torch.randn(self.y_dim)) for _ in range(self.n_sup_networks + self.aux_dim)]   # shape: (n_sup_networks + aux_dim, y_dim)
+                )
+            else:
+                # shape: (n_sup_hidden_dim, n_sup_networks + aux_dim)
+                setattr(self, "phi_list_0", nn.ParameterList(
+                    [nn.Parameter(torch.randn(self.n_sup_networks + self.aux_dim)) for _ in range(self.n_sup_hidden_dim)]
+                ))
+                for idx in range(self.n_sup_hidden_layers):
+                    # shape: (output_dim, n_sup_hidden_dim)
+                    output_dim = self.n_sup_hidden_dim if idx < self.n_sup_hidden_layers - 1 else self.y_dim
+                    setattr(self, f"phi_list_{idx+1}", nn.ParameterList(
+                        [nn.Parameter(torch.randn(self.n_sup_hidden_dim)) for _ in range(output_dim)]
+                    ))
         else:
             raise ValueError("y_dim must be either equal to n_sup_networks or 1.")
-        self.beta_list = nn.ParameterList(
-            [
-                nn.Parameter(torch.randn(self.n_intercepts, 1))
-                for _ in range(self.n_sup_networks)   # shape: (n_sup_networks, n_intercepts, 1)
-            ]
-        )
+        if self.n_sup_hidden_layers == 0:
+            self.beta_list = nn.ParameterList(
+                [
+                    nn.Parameter(torch.randn(self.n_intercepts, 1))
+                    for _ in range(self.n_sup_networks)   # shape: (n_sup_networks, n_intercepts, 1)
+                ]
+            )
+        else:
+            for idx in range(self.n_sup_hidden_layers+1):
+                beta_dim = self.n_sup_hidden_dim if idx < self.n_sup_hidden_layers else self.y_dim
+                setattr(self, f"beta_list_{idx}", nn.ParameterList(
+                    [
+                        nn.Parameter(torch.randn(self.n_intercepts, 1))
+                        for _ in range(beta_dim)   # shape: (beta_dim, n_intercepts, 1)
+                    ]
+                ))
         self.to(self.device)
     
     def instantiate_optimizer(self):
@@ -271,6 +324,11 @@ class IMAVAE(NmfBase):
         """
         Get predictions for every supervised network.
 
+        *****************************************************
+        NOTE: Not tested for case where n_intercepts > 1 and 
+        n_sup_hidden_layers > 0
+        *****************************************************
+
         Parameters
         ----------
         aux : torch.Tensor
@@ -298,45 +356,71 @@ class IMAVAE(NmfBase):
             )
             avg_intercept = True
         # Get predictions for each class.
-        if self.n_sup_networks == self.y_dim:
-            y_pred_list = []
-            for sup_net in range(self.n_sup_networks):
+        if self.n_sup_hidden_layers == 0:
+            if self.n_sup_networks == self.y_dim:
+                y_pred_list = []
+                for sup_net in range(self.n_sup_networks):
+                    if self.n_intercepts == 1:
+                        # unexpected behavior if there's a batch dimension of 1
+                        # somewhere.
+                        logit = s[:, sup_net].view(-1, 1) * self.get_phi(sup_net) + self.beta_list[sup_net] 
+                    elif self.n_intercepts > 1 and not avg_intercept:
+                        logit = s[:, sup_net].view(-1, 1) * self.get_phi(sup_net) + intercept_mask @ self.beta_list[sup_net]
+                    else:
+                        intercept_mask = (
+                            torch.ones(aux.shape[0], self.n_intercepts).to(self.device)
+                            / self.n_intercepts
+                        )
+                        logit = s[:, sup_net].view(-1, 1) * self.get_phi(sup_net) + intercept_mask @ self.beta_list[sup_net]
+                    if self.aux_dim == 1:
+                        logit += aux * self.get_phi(self.n_sup_networks)
+                    else:
+                        logit += aux[:, sup_net].view(-1, 1) * self.get_phi(self.n_sup_networks + sup_net)
+                    y_pred_sup_net = logit if self.predictor_type == "linear" else torch.sigmoid(logit)
+                    y_pred_list.append(y_pred_sup_net.view(-1, 1))
+                # Concatenate predictions into a single matrix [n_samples,n_tasks]
+                y_pred = torch.cat(y_pred_list, dim=1)
+            elif self.y_dim == 1:
+                logit = torch.sum(torch.stack(
+                    [s[:,sup_net].view(-1,1) * self.get_phi(sup_net) for sup_net in range(self.n_sup_networks)] + \
+                    [aux[:,idx].view(-1,1) * self.get_phi(idx+self.n_sup_networks) for idx in range(self.aux_dim)], 
+                    dim=1), dim=1)
                 if self.n_intercepts == 1:
-                    # unexpected behavior if there's a batch dimension of 1
-                    # somewhere.
-                    logit = s[:, sup_net].view(-1, 1) * self.get_phi(sup_net) + self.beta_list[sup_net] 
+                    logit += self.beta_list[0]
                 elif self.n_intercepts > 1 and not avg_intercept:
-                    logit = s[:, sup_net].view(-1, 1) * self.get_phi(sup_net) + intercept_mask @ self.beta_list[sup_net]
+                    logit += intercept_mask @ self.beta_list[0]
                 else:
                     intercept_mask = (
                         torch.ones(aux.shape[0], self.n_intercepts).to(self.device)
                         / self.n_intercepts
                     )
-                    logit = s[:, sup_net].view(-1, 1) * self.get_phi(sup_net) + intercept_mask @ self.beta_list[sup_net]
-                if self.aux_dim == 1:
-                    logit += aux * self.get_phi(self.n_sup_networks)
-                else:
-                    logit += aux[:, sup_net].view(-1, 1) * self.get_phi(self.n_sup_networks + sup_net)
-                y_pred_sup_net = logit if self.predictor_type == "linear" else torch.sigmoid(logit)
-                y_pred_list.append(y_pred_sup_net.view(-1, 1))
-            # Concatenate predictions into a single matrix [n_samples,n_tasks]
-            y_pred = torch.cat(y_pred_list, dim=1)
-        elif self.y_dim == 1:
-            logit = torch.sum(torch.stack(
-                [s[:,sup_net].view(-1,1) * self.get_phi(sup_net) for sup_net in range(self.n_sup_networks)] + \
-                [aux[:,idx].view(-1,1) * self.get_phi(idx+self.n_sup_networks) for idx in range(self.aux_dim)], 
-                dim=1), dim=1)
-            if self.n_intercepts == 1:
-                logit += self.beta_list[0]
-            elif self.n_intercepts > 1 and not avg_intercept:
-                logit += intercept_mask @ self.beta_list[0]
-            else:
-                intercept_mask = (
-                    torch.ones(aux.shape[0], self.n_intercepts).to(self.device)
-                    / self.n_intercepts
-                )
-                logit += intercept_mask @ self.beta_list[0]
-            y_pred = logit if self.predictor_type == "linear" else torch.sigmoid(logit)
+                    logit += intercept_mask @ self.beta_list[0]
+                y_pred = logit if self.predictor_type == "linear" else torch.sigmoid(logit)
+        else:
+            output_list = []
+            for layer_idx in range(self.n_sup_hidden_layers+1):
+                input_list = torch.cat([s,aux], dim=1) if layer_idx == 0 else output_list
+                output_list = []
+                layer_dim = len(getattr(self, f"phi_list_{layer_idx}"))   # dimension of the next layer
+                beta_list = getattr(self, f"beta_list_{layer_idx}")
+                for idx in range(layer_dim):
+                    if self.n_intercepts == 1:
+                        logit = input_list @ self.get_phi(idx, layer_idx) + beta_list[idx]
+                    elif self.n_intercepts > 1 and not avg_intercept:
+                        logit = input_list @ self.get_phi(idx, layer_idx) + intercept_mask @ beta_list[idx]
+                    else:
+                        intercept_mask = (
+                            torch.ones(aux.shape[0], self.n_intercepts).to(self.device)
+                            / self.n_intercepts
+                        )
+                        logit = input_list @ self.get_phi(idx, layer_idx) + intercept_mask @ beta_list[idx]
+                    if layer_idx < self.n_sup_hidden_layers:
+                        output = ACTIVATIONS[self.activation](logit).squeeze()
+                    else:
+                        output = logit.squeeze()
+                    output_list.append(output)
+                output_list = torch.stack(output_list, dim=1)
+            y_pred = output_list
 
         return y_pred
     
@@ -366,7 +450,7 @@ class IMAVAE(NmfBase):
         else:
             return self.encoder(X, aux)
     
-    def get_phi(self, sup_net):
+    def get_phi(self, sup_net, layer=0):
         """
         Return the linear/logistic regression coefficient correspoding to ``sup_net``.
 
@@ -380,8 +464,10 @@ class IMAVAE(NmfBase):
 
         Parameters
         ----------
-        sup_net : int, optional
+        sup_net : int
             Index of the supervised network you would like to get a coefficient for.
+        layer : int, optional
+            Index of the layer of coefficients you would like to get. Defaults to ``0``.
 
         Returns
         -------
@@ -390,14 +476,21 @@ class IMAVAE(NmfBase):
             positive or negative softplus(phi).
             shape: ``[n_sup_networks + aux_dim, 1]``
         """
-        fixed_corr_str = self.fixed_corr[sup_net].lower() if self.y_dim > 1 else self.fixed_corr[0].lower()
+        if layer == 0:
+            phi = self.phi_list[sup_net] if self.n_sup_hidden_layers == 0 else getattr(self, "phi_list_0")[sup_net]
+        else:
+            phi = getattr(self, f"phi_list_{layer}")[sup_net]
+        if layer == 0:
+            fixed_corr_str = self.fixed_corr[sup_net].lower() if self.y_dim > 1 else self.fixed_corr[0].lower()
+        else:
+            fixed_corr_str = "n/a"
         if fixed_corr_str == "n/a":
-            return self.phi_list[sup_net]
+            return phi
         elif fixed_corr_str == "positive":
             # NOTE: use nn.functional instead of nn here.
-            return F.softplus(self.phi_list[sup_net])
+            return F.softplus(phi)
         elif fixed_corr_str == "negative":
-            return -1 * F.softplus(self.phi_list[sup_net])
+            return -1 * F.softplus(phi)
         else:
             # NOTE: spit out an informative error
             raise ValueError(f"Unsupported fixed_corr value: {fixed_corr_str}")
