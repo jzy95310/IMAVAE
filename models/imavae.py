@@ -13,6 +13,7 @@ from tqdm import tqdm
 import warnings
 
 from .ivae import iVAE, ConvIVAE
+from .vae import VAE
 from .nmf_base import NmfBase
 
 
@@ -118,6 +119,8 @@ class IMAVAE(NmfBase):
     anneal : bool, optional
         Whether to apply parameter annealing when learning the iVAE.
         Defaults to ``True``.
+    identifiable : bool, optional
+        If True, use iVAE for the backbone network. If False, use regular VAE.
     model_name : str, optional
         Name of the model. Defaults to ``'imavae'``.
     save_folder : str, optional
@@ -160,6 +163,7 @@ class IMAVAE(NmfBase):
         lr=1e-3,
         weight_decay=0,
         anneal=True,
+        identifiable=True,
         model_name="imavae",
         save_folder="./model_ckpts/",
         verbose=0,
@@ -196,6 +200,7 @@ class IMAVAE(NmfBase):
         self.lr = lr
         self.weight_decay = weight_decay
         self.anneal = anneal
+        self.identifiable = identifiable
         self.model_name = model_name
         self.save_folder = save_folder
     
@@ -221,24 +226,36 @@ class IMAVAE(NmfBase):
         self.aux_dim = aux_dim if self.aug_aux_dim is None else self.aug_aux_dim
         self.y_dim = y_dim
         # Initialize the iVAE encoder
-        if isinstance(dim_in, int):
-            self.ivae = iVAE(
+        if self.identifiable:
+            if isinstance(dim_in, int):
+                self.ivae = iVAE(
+                    data_dim=self.dim_in,
+                    latent_dim=self.n_components,
+                    aux_dim=self.aux_dim,
+                    n_layers=self.n_hidden_layers,
+                    hidden_dim=self.hidden_dim,
+                    activation=self.activation,
+                    device=self.device,
+                    anneal=self.anneal
+                )
+            else:
+                self.ivae = ConvIVAE(
+                    data_width=self.dim_in[1],
+                    data_height=self.dim_in[2],
+                    data_channels=self.dim_in[0],
+                    aux_dim=self.aux_dim,
+                    latent_feature_dim=self.n_components,
+                    n_layers=self.n_hidden_layers,
+                    hidden_dim=self.hidden_dim,
+                    activation=self.activation,
+                    device=self.device,
+                    anneal=self.anneal
+                )
+        else:
+            self.ivae = VAE(
                 data_dim=self.dim_in,
                 latent_dim=self.n_components,
                 aux_dim=self.aux_dim,
-                n_layers=self.n_hidden_layers,
-                hidden_dim=self.hidden_dim,
-                activation=self.activation,
-                device=self.device,
-                anneal=self.anneal
-            )
-        else:
-            self.ivae = ConvIVAE(
-                data_width=self.dim_in[1],
-                data_height=self.dim_in[2],
-                data_channels=self.dim_in[0],
-                aux_dim=self.aux_dim,
-                latent_feature_dim=self.n_components,
                 n_layers=self.n_hidden_layers,
                 hidden_dim=self.hidden_dim,
                 activation=self.activation,
@@ -445,6 +462,8 @@ class IMAVAE(NmfBase):
         """
         if self.aug_aux_dim is not None:
             aux = self.aux_transform(aux)
+        if not self.identifiable:
+            return self.encoder(X)
         if len(X.shape) == len(aux.shape):
             return self.encoder(torch.cat([X, aux], dim=1))
         else:
@@ -551,7 +570,10 @@ class IMAVAE(NmfBase):
             recon_loss = self.NMF_decoder_forward(X, s)
         else:
             # Compute the evidence lower bound (ELBO)
-            elbo, s = self.ivae.elbo(X, aux)
+            if self.identifiable:
+                elbo, s = self.ivae.elbo(X, aux)
+            else:
+                elbo, s = self.ivae.elbo(X)
             recon_loss = self.recon_weight * nn.MSELoss()(X, self.decoder(s))
             elbo_loss = self.elbo_weight * elbo.mul(-1)
         # Get predictions
@@ -1302,8 +1324,8 @@ class IMAVAE(NmfBase):
             t0, t1 = self.aux_transform(t0), self.aux_transform(t1)
         acme_arr = []
         for _ in range(simulaltions):
-            z0 = self.prior_dist.sample(*self.ivae.prior_params(t0))
-            z1 = self.prior_dist.sample(*self.ivae.prior_params(t1))
+            z0 = self.prior_dist.sample(*self.ivae.prior_params(t0)) if self.identifiable else self.prior_dist.sample(*self.ivae.prior_params(), size=n_samples)
+            z1 = self.prior_dist.sample(*self.ivae.prior_params(t1)) if self.identifiable else self.prior_dist.sample(*self.ivae.prior_params(), size=n_samples)
             t = t1 if treatment else t0
             y_m0 = self.get_all_class_predictions(t, z0, intercept_mask=intercept_mask, avg_intercept=avg_intercept)
             y_m1 = self.get_all_class_predictions(t, z1, intercept_mask=intercept_mask, avg_intercept=avg_intercept)
@@ -1353,8 +1375,8 @@ class IMAVAE(NmfBase):
             t0, t1 = self.aux_transform(t0), self.aux_transform(t1)
         ade_arr = []
         for _ in range(simulaltions):
-            z0 = self.prior_dist.sample(*self.ivae.prior_params(t0))
-            z1 = self.prior_dist.sample(*self.ivae.prior_params(t1))
+            z0 = self.prior_dist.sample(*self.ivae.prior_params(t0)) if self.identifiable else self.prior_dist.sample(*self.ivae.prior_params(), size=n_samples)
+            z1 = self.prior_dist.sample(*self.ivae.prior_params(t1)) if self.identifiable else self.prior_dist.sample(*self.ivae.prior_params(), size=n_samples)
             z = z1 if treatment else z0
             y_t0 = self.get_all_class_predictions(t0, z, intercept_mask=intercept_mask, avg_intercept=avg_intercept)
             y_t1 = self.get_all_class_predictions(t1, z, intercept_mask=intercept_mask, avg_intercept=avg_intercept)
@@ -1400,8 +1422,8 @@ class IMAVAE(NmfBase):
             t0, t1 = self.aux_transform(t0), self.aux_transform(t1)
         ate_arr = []
         for _ in range(simulaltions):
-            z0 = self.prior_dist.sample(*self.ivae.prior_params(t0))
-            z1 = self.prior_dist.sample(*self.ivae.prior_params(t1))
+            z0 = self.prior_dist.sample(*self.ivae.prior_params(t0)) if self.identifiable else self.prior_dist.sample(*self.ivae.prior_params(), size=n_samples)
+            z1 = self.prior_dist.sample(*self.ivae.prior_params(t1)) if self.identifiable else self.prior_dist.sample(*self.ivae.prior_params(), size=n_samples)
             y_0 = self.get_all_class_predictions(t0, z0, intercept_mask=intercept_mask, avg_intercept=avg_intercept)
             y_1 = self.get_all_class_predictions(t1, z1, intercept_mask=intercept_mask, avg_intercept=avg_intercept)
             ate_arr.append((y_1 - y_0).mean().item())
