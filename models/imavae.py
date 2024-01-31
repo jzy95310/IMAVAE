@@ -12,7 +12,7 @@ from sklearn.metrics import roc_auc_score, mean_squared_error
 from tqdm import tqdm
 import warnings
 
-from .ivae import iVAE, ConvIVAE
+from .ivae import iVAE, ConvIVAE, Normal
 from .vae import VAE
 from .nmf_base import NmfBase
 
@@ -78,6 +78,9 @@ class IMAVAE(NmfBase):
     n_sup_hidden_dim: int, optional
         Number of hidden units in the supervised networks. 
         Defaults to ``30``.
+    sup_conditional_gaussian: bool, optional
+        Whether to use a conditional Gaussian distribution for the supervised
+        network. Defaults to ``False``.
     aug_aux_dim: int, optional
         If given, the auxiliary variable will be augmented into
         the specified dimensionality. Defaults to ``None``.
@@ -150,6 +153,7 @@ class IMAVAE(NmfBase):
         hidden_dim=50,
         n_sup_hidden_layers=0,
         n_sup_hidden_dim=30,
+        sup_conditional_gaussian=False,
         aug_aux_dim=None,
         activation="lrelu",
         predictor_type="linear",
@@ -190,6 +194,7 @@ class IMAVAE(NmfBase):
         self.hidden_dim = hidden_dim
         self.n_sup_hidden_layers = n_sup_hidden_layers
         self.n_sup_hidden_dim = n_sup_hidden_dim
+        self.sup_conditional_gaussian = sup_conditional_gaussian
         self.aug_aux_dim = aug_aux_dim
         self.activation = activation
         self.predictor_type = predictor_type
@@ -293,6 +298,18 @@ class IMAVAE(NmfBase):
                     setattr(self, f"phi_list_{idx+1}", nn.ParameterList(
                         [nn.Parameter(torch.randn(self.n_sup_hidden_dim)) for _ in range(output_dim)]
                     ))
+                if self.sup_conditional_gaussian:
+                    # shape: (n_sup_networks, n_sup_hidden_dim)
+                    # Parameters for the standard deviation of the conditional Gaussian
+                    setattr(self, "sigma_list_0", nn.ParameterList(
+                        [nn.Parameter(torch.randn(self.n_sup_networks + self.aux_dim)) for _ in range(self.n_sup_hidden_dim)]
+                    ))
+                    for idx in range(self.n_sup_hidden_layers):
+                        # shape: (output_dim, n_sup_hidden_dim)
+                        output_dim = self.n_sup_hidden_dim if idx < self.n_sup_hidden_layers - 1 else self.y_dim
+                        setattr(self, f"sigma_list_{idx+1}", nn.ParameterList(
+                            [nn.Parameter(torch.randn(self.n_sup_hidden_dim)) for _ in range(output_dim)]
+                        ))
         else:
             raise ValueError("y_dim must be either equal to n_sup_networks or 1.")
         if self.n_sup_hidden_layers == 0:
@@ -311,6 +328,18 @@ class IMAVAE(NmfBase):
                         for _ in range(beta_dim)   # shape: (beta_dim, n_intercepts, 1)
                     ]
                 ))
+            if self.sup_conditional_gaussian:
+                # Bias parameters for the standard deviation of the conditional Gaussian
+                for idx in range(self.n_sup_hidden_layers+1):
+                    gamma_dim = self.n_sup_hidden_dim if idx < self.n_sup_hidden_layers else self.y_dim
+                    setattr(self, f"gamma_list_{idx}", nn.ParameterList(
+                        [
+                            nn.Parameter(torch.randn(self.n_intercepts, 1))
+                            for _ in range(gamma_dim)   # shape: (gamma_dim, n_intercepts, 1)
+                        ]
+                    ))
+        if self.sup_conditional_gaussian:
+            self.sup_dist = Normal(device=self.device)
         self.to(self.device)
     
     def instantiate_optimizer(self):
@@ -362,7 +391,7 @@ class IMAVAE(NmfBase):
 
         Returns
         -------
-        y_pred_proba : torch.Tensor
+        y_pred : torch.Tensor
             Predictions
             Shape: ``[batch_size, n_sup_networks]``
         """
@@ -414,32 +443,63 @@ class IMAVAE(NmfBase):
                     logit += intercept_mask @ self.beta_list[0]
                 y_pred = logit if self.predictor_type == "linear" else torch.sigmoid(logit)
         else:
-            output_list = []
-            for layer_idx in range(self.n_sup_hidden_layers+1):
-                input_list = torch.cat([s,aux], dim=1) if layer_idx == 0 else output_list
-                output_list = []
-                layer_dim = len(getattr(self, f"phi_list_{layer_idx}"))   # dimension of the next layer
-                beta_list = getattr(self, f"beta_list_{layer_idx}")
-                for idx in range(layer_dim):
-                    if self.n_intercepts == 1:
-                        logit = input_list @ self.get_phi(idx, layer_idx) + beta_list[idx]
-                    elif self.n_intercepts > 1 and not avg_intercept:
-                        logit = input_list @ self.get_phi(idx, layer_idx) + intercept_mask @ beta_list[idx]
-                    else:
-                        intercept_mask = (
-                            torch.ones(aux.shape[0], self.n_intercepts).to(self.device)
-                            / self.n_intercepts
-                        )
-                        logit = input_list @ self.get_phi(idx, layer_idx) + intercept_mask @ beta_list[idx]
-                    if layer_idx < self.n_sup_hidden_layers:
-                        output = ACTIVATIONS[self.activation](logit).squeeze()
-                    else:
-                        output = logit.squeeze()
-                    output_list.append(output)
-                output_list = torch.stack(output_list, dim=1)
-            y_pred = output_list
+            if not self.sup_conditional_gaussian:
+                y_pred = self.get_mlp_out(aux, s, intercept_mask, avg_intercept)
+            else:
+                mean = self.get_mlp_out(aux, s, intercept_mask, avg_intercept, param_name="mean")
+                var = self.get_mlp_out(aux, s, intercept_mask, avg_intercept, param_name="logvar").exp()
+                y_pred = self.sup_dist.sample(mean, var)
 
         return y_pred
+    
+    def get_mlp_out(self, aux, s, intercept_mask, avg_intercept, param_name="mean"):
+        """
+        Compute the output of an MLP with specified number of hidden layers
+        and layer dimensions.
+
+        Parameters
+        ----------
+        aux : torch.Tensor
+            Auxiliary features
+            Shape: ``[batch_size,aux_dim]``
+        s : torch.Tensor
+            latent embeddings
+            Shape: ``[batch_size,n_components]``
+        intercept_mask : torch.Tensor
+            One-hot encoded mask for linear/logistic regression intercept terms
+            Shape: ``[batch_size,n_intercepts]``
+        avg_intercept : bool
+            Whether to average all intercepts together.
+        param_name : str, optional
+            Parameter name to get from the network. Must be either ``'mean'`` or ``'logvar'``.
+        """
+        assert param_name in ["mean", "logvar"], "param_name must be either 'mean' or 'logvar'."
+        param_list_name = "phi_list" if param_name == "mean" else "sigma_list"
+        bias_list_name = "beta_list" if param_name == "mean" else "gamma_list"
+        output_list = []
+        for layer_idx in range(self.n_sup_hidden_layers+1):
+            input_list = torch.cat([s,aux], dim=1) if layer_idx == 0 else output_list
+            output_list = []
+            layer_dim = len(getattr(self, f"{param_list_name}_{layer_idx}"))   # dimension of the next layer
+            beta_list = getattr(self, f"{bias_list_name}_{layer_idx}")
+            for idx in range(layer_dim):
+                if self.n_intercepts == 1:
+                    logit = input_list @ self.get_phi(idx, layer_idx, param_list_name=param_list_name) + beta_list[idx]
+                elif self.n_intercepts > 1 and not avg_intercept:
+                    logit = input_list @ self.get_phi(idx, layer_idx, param_list_name=param_list_name) + intercept_mask @ beta_list[idx]
+                else:
+                    intercept_mask = (
+                        torch.ones(aux.shape[0], self.n_intercepts).to(self.device)
+                        / self.n_intercepts
+                    )
+                    logit = input_list @ self.get_phi(idx, layer_idx, param_list_name=param_list_name) + intercept_mask @ beta_list[idx]
+                if layer_idx < self.n_sup_hidden_layers:
+                    output = ACTIVATIONS[self.activation](logit).squeeze()
+                else:
+                    output = logit.squeeze()
+                output_list.append(output)
+            output_list = torch.stack(output_list, dim=1)
+        return output_list
     
     def get_embedding(self, X, aux):
         """
@@ -469,7 +529,7 @@ class IMAVAE(NmfBase):
         else:
             return self.encoder(X, aux)
     
-    def get_phi(self, sup_net, layer=0):
+    def get_phi(self, sup_net, layer=0, param_list_name="phi_list"):
         """
         Return the linear/logistic regression coefficient correspoding to ``sup_net``.
 
@@ -496,9 +556,9 @@ class IMAVAE(NmfBase):
             shape: ``[n_sup_networks + aux_dim, 1]``
         """
         if layer == 0:
-            phi = self.phi_list[sup_net] if self.n_sup_hidden_layers == 0 else getattr(self, "phi_list_0")[sup_net]
+            phi = self.phi_list[sup_net] if self.n_sup_hidden_layers == 0 else getattr(self, f"{param_list_name}_0")[sup_net]
         else:
-            phi = getattr(self, f"phi_list_{layer}")[sup_net]
+            phi = getattr(self, f"{param_list_name}_{layer}")[sup_net]
         if layer == 0:
             fixed_corr_str = self.fixed_corr[sup_net].lower() if self.y_dim > 1 else self.fixed_corr[0].lower()
         else:
