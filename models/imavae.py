@@ -124,6 +124,12 @@ class IMAVAE(NmfBase):
         Defaults to ``True``.
     identifiable : bool, optional
         If True, use iVAE for the backbone network. If False, use regular VAE.
+    beta : float, optional
+        Beta value for the beta-VAE. Defaults to ``1.0``.
+        Only supported when ``identifiable=False``.
+    prior_scale : float, optional
+        Scale of the prior distribution. Defaults to ``1.0``.
+        Only supported when ``identifiable=False``.
     model_name : str, optional
         Name of the model. Defaults to ``'imavae'``.
     save_folder : str, optional
@@ -168,6 +174,8 @@ class IMAVAE(NmfBase):
         weight_decay=0,
         anneal=True,
         identifiable=True,
+        beta=1.0,
+        prior_scale=1.0,
         model_name="imavae",
         save_folder="./model_ckpts/",
         verbose=0,
@@ -206,6 +214,8 @@ class IMAVAE(NmfBase):
         self.weight_decay = weight_decay
         self.anneal = anneal
         self.identifiable = identifiable
+        self.beta = beta
+        self.prior_scale = prior_scale
         self.model_name = model_name
         self.save_folder = save_folder
     
@@ -261,8 +271,10 @@ class IMAVAE(NmfBase):
                 data_dim=self.dim_in,
                 latent_dim=self.n_components,
                 aux_dim=self.aux_dim,
+                beta=self.beta,
                 n_layers=self.n_hidden_layers,
                 hidden_dim=self.hidden_dim,
+                prior_scale=self.prior_scale,
                 activation=self.activation,
                 device=self.device,
                 anneal=self.anneal

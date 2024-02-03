@@ -218,14 +218,16 @@ class GaussianMLP(nn.Module):
 
 
 class VAE(nn.Module):
-    def __init__(self, latent_dim, data_dim, aux_dim, prior=None, decoder=None, encoder=None,
-                 n_layers=3, hidden_dim=50, activation='lrelu', slope=.1, device='cpu', anneal=False):
+    def __init__(self, latent_dim, data_dim, aux_dim, beta=1., prior=None, decoder=None, encoder=None,
+                 n_layers=3, hidden_dim=50, prior_scale=1.0, activation='lrelu', slope=.1, device='cpu', anneal=False):
         super().__init__()
 
         self.data_dim = data_dim
         self.latent_dim = latent_dim
         self.aux_dim = aux_dim   # auxiliary input dimension is not used in regular VAE
+        self.beta = beta   # beta-VAE parameter
         self.hidden_dim = hidden_dim
+        self.prior_scale = prior_scale
         self.n_layers = n_layers
         self.activation = activation
         self.slope = slope
@@ -248,7 +250,7 @@ class VAE(nn.Module):
 
         # no prior params, just sample from a standard normal
         self.prior_mean = torch.zeros(self.latent_dim).to(device)
-        self.logl = torch.ones(self.latent_dim).to(device)
+        self.logl = self.prior_scale * torch.ones(self.latent_dim).to(device)
         # decoder params
         self.f = MLP(latent_dim, data_dim, hidden_dim, n_layers, activation=activation, slope=slope, device=device)
         self.logd = MLP(latent_dim, data_dim, hidden_dim, n_layers, activation=activation, slope=slope, device=device)
@@ -274,7 +276,7 @@ class VAE(nn.Module):
         return f, logd.exp()
 
     def prior_params(self):
-        return self.prior_mean, self.logl   # no exp() for variance
+        return self.prior_mean, self.logl   
 
     def forward(self, x):
         prior_params = self.prior_params()
@@ -301,7 +303,7 @@ class VAE(nn.Module):
             The annealing parameters a, b, c, and d control the rate at which the weight of the KL divergence term is 
             increased during training. The parameter a controls the weight of the reconstruction term, while b, c, 
             and d control the weight of the KL divergence term at different stages of training.
-            Note that the KL divergence term in ELBO is KL(q(z|x,u)||p(z|u)) = log(q(z|x,u)) - log(p(z|u))
+            Note that the KL divergence term in ELBO is KL(q(z|x)||p(z)) = E_{q(z|x)}[log(q(z|x)) - log(p(z))]
 
             The KL divergence term here is decomposed into 3 terms: : b * (log_qz_xu - log_qz), c * (log_qz - log_qz_i), 
             and d * (log_qz_i - log_pz_u), where log_qz is an estimate of the log probability of the variational 
@@ -310,11 +312,11 @@ class VAE(nn.Module):
             process more stable by controlling the values of a, b, c, and d because the variational distribution log_qz_xu 
             can be difficult to estimate accurately, especially early in training. 
             """
-            return (a * log_px_z - b * (log_qz_x - log_qz) - c * (log_qz - log_qz_i) - d * (
-                    log_qz_i - log_pz)).mean(), z
+            return (a * log_px_z - self.beta * (b * (log_qz_x - log_qz) - c * (log_qz - log_qz_i) - d * (
+                    log_qz_i - log_pz))).mean(), z
 
         else:
-            return (log_px_z + log_pz - log_qz_x).mean(), z
+            return (log_px_z + self.beta * (log_pz - log_qz_x)).mean(), z
 
     def anneal(self, N, max_iter, it):
         thr = int(max_iter / 1.6)

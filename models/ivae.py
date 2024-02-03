@@ -457,7 +457,7 @@ class iVAE(nn.Module):
             The annealing parameters a, b, c, and d control the rate at which the weight of the KL divergence term is 
             increased during training. The parameter a controls the weight of the reconstruction term, while b, c, 
             and d control the weight of the KL divergence term at different stages of training.
-            Note that the KL divergence term in ELBO is KL(q(z|x,u)||p(z|u)) = log(q(z|x,u)) - log(p(z|u))
+            Note that the KL divergence term in ELBO is KL(q(z|x,u)||p(z|u)) = E_{log(q(z|x,u))}[log(q(z|x,u)) - log(p(z|u))]
 
             The KL divergence term here is decomposed into 3 terms: : b * (log_qz_xu - log_qz), c * (log_qz - log_qz_i), 
             and d * (log_qz_i - log_pz_u), where log_qz is an estimate of the log probability of the variational 
