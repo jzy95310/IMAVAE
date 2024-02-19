@@ -81,7 +81,7 @@ if __name__ == '__main__':
     arg_parser.add_argument('--n_sup_networks', type=int, default=30)
     arg_parser.add_argument('--n_hidden_layers', type=int, default=2)
     arg_parser.add_argument('--hidden_dim', type=int, default=128)
-    arg_parser.add_argument('--n_sup_hidden_layers', type=int, default=1)
+    arg_parser.add_argument('--n_sup_hidden_layers', type=int, default=3)
     arg_parser.add_argument('--n_sup_hidden_dim', type=int, default=10)
     arg_parser.add_argument('--optim_name', type=str, default="Adam")
     arg_parser.add_argument('--recon_weight', type=float, default=0.1)

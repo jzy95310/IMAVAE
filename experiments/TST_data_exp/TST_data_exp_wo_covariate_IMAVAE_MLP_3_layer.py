@@ -14,18 +14,18 @@ torch.cuda.manual_seed_all(2020)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
+import warnings
+warnings.filterwarnings('ignore')
+
 def main(args):
-    with open('../../data/mediation_tst_shifted.pkl', 'rb') as fp:
+    with open('../../data/mediation_tst_shifted_wo_covariate.pkl', 'rb') as fp:
         data = pkl.load(fp)
-    print("Dimension of X: ({}, {})".format(data['M'].shape[0], data['M'].shape[1]))
+    print("Dimension of M: ({}, {})".format(data['M'].shape[0], data['M'].shape[1]))
     print("Dimension of Z: ({}, {})".format(data['Z'].shape[0], data['Z'].shape[1]))
-    print("Dimension of W: ({}, {})".format(data['geno'].shape[0], 1))
-    X = data['M']
+    M = data['M']
     Z = data['Z']
     T = data['T'].astype(int).reshape(-1,1)
     Y = data['Y']
-    W = data['geno'].astype(int).reshape(-1,1)
-    WT = np.concatenate([T,W], axis=1)
 
     imavae = IMAVAE(
         n_components=args.n_components, 
@@ -41,18 +41,18 @@ def main(args):
         sup_weight=args.sup_weight
     )
     _ = imavae.fit(
-        X, WT, Y, # X_val=X, aux_val=WT, y_val=Y, 
+        M, T, Y, # X_val=M, T_val=T, y_val=Y, 
         lr=args.lr, 
         n_epochs=args.n_epochs, 
         batch_size=args.batch_size,
         pretrain=False, 
         verbose=args.verbose
     )
-    acme_c_mean, acme_c_std = imavae.acme_score(WT, treatment=False)
-    acme_t_mean, acme_t_std = imavae.acme_score(WT, treatment=True)
-    ade_c_mean, ade_c_std = imavae.ade_score(WT, treatment=False)
-    ade_t_mean, ade_t_std = imavae.ade_score(WT, treatment=True)
-    ate_mean, ate_std = imavae.ate_score(WT)
+    acme_c_mean, acme_c_std = imavae.acme_score(T, treatment=False)
+    acme_t_mean, acme_t_std = imavae.acme_score(T, treatment=True)
+    ade_c_mean, ade_c_std = imavae.ade_score(T, treatment=False)
+    ade_t_mean, ade_t_std = imavae.ade_score(T, treatment=True)
+    ate_mean, ate_std = imavae.ate_score(T)
     print("ACME (control) = {:.4f} +/- {:.4f}".format(acme_c_mean, acme_c_std))
     print("ACME (treatment) = {:.4f} +/- {:.4f}".format(acme_t_mean, acme_t_std))
     print("ADE (control) = {:.4f} +/- {:.4f}".format(ade_c_mean, ade_c_std))
@@ -72,7 +72,7 @@ def main(args):
         'ade_t': {'mean': ade_t_mean, 'std': ade_t_std, 'true': data['ade_t_true']}, 
         'ate': {'mean': ate_mean, 'std': ate_std, 'true': data['ate_true']}
     }
-    with open('./results/tst_exp_with_covariate_IMAVAE.pkl', 'wb') as fp:
+    with open('./results/tst_exp_wo_covariate_IMAVAE.pkl', 'wb') as fp:
         pkl.dump(res, fp)
 
 if __name__ == '__main__':
@@ -81,13 +81,13 @@ if __name__ == '__main__':
     arg_parser.add_argument('--n_sup_networks', type=int, default=30)
     arg_parser.add_argument('--n_hidden_layers', type=int, default=2)
     arg_parser.add_argument('--hidden_dim', type=int, default=128)
-    arg_parser.add_argument('--n_sup_hidden_layers', type=int, default=1)
+    arg_parser.add_argument('--n_sup_hidden_layers', type=int, default=3)
     arg_parser.add_argument('--n_sup_hidden_dim', type=int, default=10)
     arg_parser.add_argument('--optim_name', type=str, default="Adam")
     arg_parser.add_argument('--recon_weight', type=float, default=0.1)
     arg_parser.add_argument('--elbo_weight', type=float, default=0.1)
     arg_parser.add_argument('--sup_weight', type=float, default=1.)
-    arg_parser.add_argument('--lr', type=float, default=5e-6)
+    arg_parser.add_argument('--lr', type=float, default=1e-6)
     arg_parser.add_argument('--weight_decay', type=float, default=0.1)
     arg_parser.add_argument('--n_epochs', type=int, default=100)
     arg_parser.add_argument('--batch_size', type=int, default=128)

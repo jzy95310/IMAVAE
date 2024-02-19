@@ -153,12 +153,12 @@ def main():
     params_df.to_csv(os.path.join(result_path,'tst_exp_wo_covariate_shallow_LSEM.csv'))
     
     res = pd.read_csv('./results/csv_files/tst_exp_wo_covariate_shallow_LSEM.csv')
-    alpha_mean = np.mean(np.array(res['alpha.{}'.format(num_iters-1)][1:]).astype(float))
-    alpha_std = np.std(np.array(res['alpha.{}'.format(num_iters-1)][1:]).astype(float))
-    beta_mean = np.mean(np.array(res['beta.{}'.format(num_iters-1)][1:]).astype(float))
-    beta_std = np.std(np.array(res['beta.{}'.format(num_iters-1)][1:]).astype(nloat))
-    gamma_mean = np.mean(np.array(res['gamma.{}'.format(num_iters-1)][1:]).astype(float))
-    gamma_std = np.std(np.array(res['gamma.{}'.format(num_iters-1)][1:]).astype(float))
+    alpha_mean = np.mean(np.array(res['alpha.{}'.format(num_iters-1)][1:]).astype(np.float))
+    alpha_std = np.std(np.array(res['alpha.{}'.format(num_iters-1)][1:]).astype(np.float))
+    beta_mean = np.mean(np.array(res['beta.{}'.format(num_iters-1)][1:]).astype(np.float))
+    beta_std = np.std(np.array(res['beta.{}'.format(num_iters-1)][1:]).astype(np.float))
+    gamma_mean = np.mean(np.array(res['gamma.{}'.format(num_iters-1)][1:]).astype(np.float))
+    gamma_std = np.std(np.array(res['gamma.{}'.format(num_iters-1)][1:]).astype(np.float))
     acme_c_mean = alpha_mean * beta_mean
     acme_c_std = ((alpha_std**2+alpha_mean**2)*(beta_std**2+beta_mean**2) - (alpha_mean**2)*(beta_mean**2))**(0.5)
     acme_t_mean = alpha_mean * beta_mean
