@@ -488,6 +488,7 @@ class IMAVAE(NmfBase):
         assert param_name in ["mean", "logvar"], "param_name must be either 'mean' or 'logvar'."
         param_list_name = "phi_list" if param_name == "mean" else "sigma_list"
         bias_list_name = "beta_list" if param_name == "mean" else "gamma_list"
+        activation = ACTIVATIONS[self.activation]
         output_list = []
         for layer_idx in range(self.n_sup_hidden_layers+1):
             input_list = torch.cat([s,aux], dim=1) if layer_idx == 0 else output_list
@@ -510,7 +511,7 @@ class IMAVAE(NmfBase):
                 else:
                     output = logit.squeeze()
                 output_list.append(output)
-            output_list = torch.stack(output_list, dim=1)
+            output_list = activation(torch.stack(output_list, dim=1))
         return output_list
     
     def get_embedding(self, X, aux):
